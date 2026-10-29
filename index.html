@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vélib verts 3 ⭐ autour de moi</title>
+    <style>
+      :root { font-family: system-ui, sans-serif; color: #111827; background: #f0f4f8; }
+      body { margin: 0; padding: 16px; max-width: 720px; margin-inline: auto; }
+      h1 { font-size: 1.3rem; margin: 0 0 4px; }
+      .sub { color: #555; font-size: .85rem; margin-bottom: 14px; }
+      .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+      input[type=text] { flex: 1; min-width: 200px; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: .95rem; }
+      button { padding: 9px 14px; border: none; border-radius: 8px; background: #0e7490; color: #fff; font-size: .95rem; cursor: pointer; }
+      button:hover { background: #155e75; }
+      button.sec { background: #64748b; }
+      button.sec:hover { background: #475569; }
+      button.top { background: #b45309; }
+      button.top:hover { background: #92400e; }
+      .topcard { background: linear-gradient(135deg, #fffbeb, #fef3c7); border: 2px solid #f59e0b; }
+      .card { background: #fff; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+      .card h2 { font-size: 1.02rem; margin: 0 0 2px; }
+      .dist { color: #0e7490; font-size: .85rem; font-weight: 600; }
+      ul { list-style: none; padding: 0; margin: 8px 0 0; }
+      li { padding: 6px 8px; border-left: 3px solid #16a34a; margin-bottom: 5px; background: #f8fafc; border-radius: 0 6px 6px 0; font-size: .92rem; }
+      .bike { color: #64748b; font-size: .82rem; }
+      .ok { color: #16a34a; font-weight: 600; }
+      .msg { padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; font-size: .9rem; }
+      .err { background: #fee2e2; color: #991b1b; }
+      .info { background: #dbeafe; color: #1e40af; }
+      .foot { color: #94a3b8; font-size: .78rem; margin-top: 16px; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <h1>🚲 Vélib verts 3 ⭐ autour de moi</h1>
+    <div class="sub">Vélos mécaniques (verts) notés 3 étoiles, avec borne, station, distance et dernier avis.</div>
+
+    <div class="controls">
+      <input id="place" type="text" placeholder="Où êtes-vous ? (adresse, gare, quartier…)" />
+      <button id="btnGeo">📍 Position actuelle</button>
+      <button id="btnHome" class="sec">🏠 Domicile</button>
+    </div>
+    <div class="controls">
+      <button id="btnSearch">Chercher les Vélib</button>
+      <button id="btnTop" class="top">🏆 Top choix</button>
+    </div>
+    <div id="msg"></div>
+    <div id="results"></div>
+    <div class="foot">
+      Données : notes ⭐ de l'application Vélib, via l'API Velibest (tdqr.ovh) — source tierce non officielle.
+      Domicile par défaut : 128 bd Macdonald, Paris 19e. Les notes n'étant pas publiées par l'API officielle Vélib,
+      le site velibest.fr reste la référence en cas de dysfonctionnement.
+    </div>
+    <script>
+      const API = "/api";
+      const HOME = { lat: 48.89883, lon: 2.37933, label: "Domicile (128 bd Macdonald)" };
+      let pos = null;
+      let lastAll = null;
+      const $ = (id) => document.getElementById(id);
+      const setMsg = (t, cls) => $("msg").innerHTML = t ? `<div class="msg ${cls}">${t}</div>` : "";
+      const rel = (iso) => {
+        if (!iso) return "date inconnue";
+        const h = Math.round((Date.now() - Date.parse(iso)) / 3600000);
+        if (h < 1) return "il y a moins d'1h";
+        if (h < 48) return "il y a " + h + "h";
+        return "il y a " + Math.round(h / 24) + " jours";
+      };
+      const hav = (lat1, lon1, lat2, lon2) => {
+        const R = 6371000, r = Math.PI / 180;
+        const a = Math.sin((lat2-lat1)*r/2)**2 + Math.cos(lat1*r)*Math.cos(lat2*r)*Math.sin((lon2-lon1)*r/2)**2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      };
+      async function getJSON(url) {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }
+      async function geocode(q) {
+        const qs = encodeURIComponent(q + " Paris");
+        const providers = [
+          async () => {
+            const d = await getJSON("https://photon.komoot.io/api/?limit=1&q=" + qs);
+            const f = d.features && d.features[0];
+            return f && { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], label: f.properties.name || q };
+          },
+          async () => {
+            const d = await getJSON("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + qs);
+            return d[0] && { lat: +d[0].lat, lon: +d[0].lon, label: d[0].display_name || q };
+          },
+          async () => {
+            const d = await getJSON("https://api-adresse.data.gouv.fr/search/?limit=1&q=" + qs);
+            return d.features && d.features[0] && { lat: d.features[0].geometry.coordinates[1], lon: d.features[0].geometry.coordinates[0], label: d.features[0].properties.label || q };
+          },
+        ];
+        for (const p of providers) {
+          try { const r = await p(); if (r) return r; } catch (e) { /* essai suivant */ }
+        }
+        throw new Error("lieu introuvable");
+      }
+      async function search(p) {
+        setMsg("Recherche en cours…", "info");
+        $("results").innerHTML = "";
+        let data;
+        try {
+          data = await getJSON(`${API}/stations/near?latitude=${p.lat}&longitude=${p.lon}&radius=600`);
+        } catch (e) {
+          setMsg("Impossible de joindre l'API Vélib (" + e.message + "). Vérifiez votre connexion, puis rechargez la page. Si ça persiste, ouvrez velibest.fr.", "err");
+          return;
+        }
+        const stations = (data.data || []).filter(s => s.mechanical_bikes > 0)
+          .map(s => ({ ...s, d: hav(p.lat, p.lon, s.latitude, s.longitude) }))
+          .sort((a, b) => a.d - b.d);
+        let html = "", n = 0;
+        const allThree = [];
+        for (const s of stations) {
+          try {
+            const bd = await getJSON(`${API}/bikes/station/${s.id}/available`);
+            const three = (bd.data || []).filter(b => b.type === "mechanical" && b.bikeRate === 3);
+            if (!three.length) continue;
+            n += three.length;
+            for (const b of three) allThree.push({
+              station: s.name, dist: s.d, dock: b.dockPosition,
+              bike: String(b.id).replace("bike_", ""),
+              score: b.score ?? null,
+              lastUse: b.last_updated ? Date.parse(b.last_updated) : null,
+              ts: b.lastRateDate ? Date.parse(b.lastRateDate) : null,
+              relDate: rel(b.lastRateDate)
+            });
+            html += `<div class="card"><h2>${s.name}</h2>
+              <div class="dist">à ${Math.round(s.d)} m — ${three.length} vélo(s) vert(s) 3 ⭐</div>
+              <ul>` + three.map(b =>
+                `<li>Borne n°${b.dockPosition ?? "?"} — dernier avis : <span class="ok">${rel(b.lastRateDate)}</span>
+                 <div class="bike">vélo ${String(b.id).replace("bike_", "")}</div></li>`).join("") +
+              `</ul></div>`;
+          } catch (e) { /* station ignorée */ }
+        }
+        setMsg("");
+        lastAll = allThree;
+        const topHtml = topHtmlFor(allThree);
+        $("results").innerHTML = topHtml + (html || `<div class="msg info">Aucun vélo vert 3 ⭐ trouvé dans un rayon de 600 m autour de : ${p.label}.</div>`);
+      }
+      const medals = ["🥇", "🥈"];
+      function topHtmlFor(all) {
+        if (!all || !all.length) return "";
+        const ranked = [...all].sort((a, b) =>
+          (a.dist - b.dist) ||
+          ((b.score ?? -1) - (a.score ?? -1)) ||
+          ((b.lastUse ?? 0) - (a.lastUse ?? 0))
+        ).slice(0, 2);
+        return ranked.map((b, i) =>
+          `<div class="card topcard"><h2>${medals[i]} Top choix ${i + 1}</h2>
+            <div class="dist">${b.station} — à ${Math.round(b.dist)} m</div>
+            <ul><li>Borne n°${b.dock ?? "?"} — score Velibest : <span class="ok">${b.score ?? "?"}/100</span>
+            <div class="bike">vélo ${b.bike} · dernière utilisation : ${b.lastUse ? rel(new Date(b.lastUse).toISOString()) : "inconnue"}</div></li></ul></div>`).join("");
+      }
+      $("btnSearch").onclick = async () => {
+        const q = $("place").value.trim();
+        if (!q) { setMsg("Indiquez un lieu, ou utilisez 📍 Position actuelle / 🏠 Domicile.", "err"); return; }
+        try { pos = await geocode(q); await search(pos); }
+        catch (e) { setMsg("Erreur : " + e.message, "err"); }
+      };
+      $("btnGeo").onclick = () => {
+        if (!navigator.geolocation) { setMsg("Géolocalisation non disponible sur cet appareil.", "err"); return; }
+        if (!window.isSecureContext) { setMsg("La géolocalisation exige un contexte sécurisé. Si le bouton ne marche pas, tapez votre lieu dans le champ texte.", "err"); return; }
+        setMsg("Localisation en cours…", "info");
+        navigator.geolocation.getCurrentPosition(
+          async (g) => { pos = { lat: g.coords.latitude, lon: g.coords.longitude, label: "ma position" }; await search(pos); },
+          () => setMsg("Géolocalisation refusée ou indisponible. Tapez un lieu à la place.", "err"),
+          { timeout: 10000 });
+      };
+      $("btnHome").onclick = () => search(HOME);
+      $("btnTop").onclick = async () => {
+        const stripTop = () => document.querySelectorAll(".topcard").forEach(el => el.remove());
+        if (!lastAll) { await search(pos || HOME); return; }
+        stripTop();
+        $("results").innerHTML = topHtmlFor(lastAll) + $("results").innerHTML;
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      };
+      search(HOME);
+    </script>
+  </body>
+</html>
